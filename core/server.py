@@ -15,6 +15,7 @@ class HoneyServer:
             brute_force_threshold=config.get("brute_force_threshold", 5),
             time_window=config.get("time_window", 10)
         )
+        self.processing_delay = config.get("processing_delay", 1.0)
         self.running = False
 
     def start(self):
@@ -94,7 +95,8 @@ class HoneyServer:
                     print(f"Severity: {analysis['severity']}\n")
 
             # 5. Deny Access
-            time.sleep(1) # Fake processing delay
+            if self.processing_delay > 0:
+                time.sleep(self.processing_delay) # Fake processing delay
             client_sock.sendall(b"\r\nLogin incorrect\r\n")
             client_sock.close()
             
