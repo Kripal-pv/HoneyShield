@@ -4,15 +4,18 @@ from datetime import datetime
 import threading
 
 class HoneyLogger:
-    def __init__(self, log_file="logs/honeypot_log.json"):
-        self.log_file = log_file
+    def __init__(self, log_filename="honeypot_log.json"):
+        # Determine absolute path to HoneyShieldPro/logs/
+        # This file is in core/ so we go up one level
+        self.base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.log_dir = os.path.join(self.base_dir, 'logs')
+        self.log_file = os.path.join(self.log_dir, log_filename)
         self.lock = threading.Lock()
         self._ensure_log_dir()
 
     def _ensure_log_dir(self):
-        log_dir = os.path.dirname(self.log_file)
-        if log_dir and not os.path.exists(log_dir):
-            os.makedirs(log_dir)
+        if not os.path.exists(self.log_dir):
+            os.makedirs(self.log_dir)
         
         # Initialize file if it doesn't exist
         if not os.path.exists(self.log_file):

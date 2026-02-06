@@ -32,7 +32,15 @@ def main():
     print(f"[*] Enabled Detection Modes: {active_modes}")
     
     server = HoneyServerPro("0.0.0.0", port, active_modes)
-    server.start()
+    try:
+        server.start()
+    except OSError as e:
+        if "Address already in use" in str(e) or "[WinError 10048]" in str(e):
+            print(f"\n[ERROR] Port {port} is already in use. Please stop other services or choose a different port.")
+        else:
+            print(f"\n[ERROR] Failed to start server: {e}")
+    except Exception as e:
+        print(f"\n[ERROR] Unexpected error: {e}")
 
 if __name__ == "__main__":
     main()

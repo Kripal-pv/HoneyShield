@@ -9,7 +9,7 @@ class HoneyServerPro:
         self.host = host
         self.port = port
         self.banner = "SSH-2.0-OpenSSH_8.2p1 Ubuntu"
-        self.logger = HoneyLogger("logs/honeypot_log.json")
+        self.logger = HoneyLogger("honeypot_log.json")
         self.detector = DetectionEngine(active_modes)
         self.running = False
 
