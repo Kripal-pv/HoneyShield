@@ -1,21 +1,14 @@
 import socket
 import threading
 import time
-from .logger import HoneyLogger
-from .analyzer import Analyzer
 
-class HoneyServer:
-    def __init__(self, host, port, banner, config):
+class HoneyServerPro:
+    def __init__(self, host, port, detector, logger):
         self.host = host
         self.port = port
-        self.banner = banner
-        self.config = config
-        self.logger = HoneyLogger(config.get("log_file", "logs/honeypot_log.json"))
-        self.analyzer = Analyzer(
-            brute_force_threshold=config.get("brute_force_threshold", 5),
-            time_window=config.get("time_window", 10)
-        )
-        self.processing_delay = config.get("processing_delay", 1.0)
+        self.banner = "SSH-2.0-OpenSSH_8.2p1 Ubuntu"
+        self.logger = logger
+        self.detector = detector
         self.running = False
 
     def start(self):
@@ -26,7 +19,7 @@ class HoneyServer:
             server_socket.bind((self.host, self.port))
             server_socket.listen(5)
             
-            print(f"[*] HoneyShield Active on {self.host}:{self.port}")
+            print(f"[*] HoneyShield Pro Active on {self.host}:{self.port}")
             print(f"[*] Banner: {self.banner}")
             
             while self.running:
@@ -40,72 +33,97 @@ class HoneyServer:
                 
         except Exception as e:
             print(f"[!] Server Error: {e}")
+        except KeyboardInterrupt:
+            print("\nShutting down server...")
         finally:
-            server_socket.close()
+            try:
+                server_socket.close()
+            except:
+                pass
 
     def handle_client(self, client_sock, addr):
         ip, port = addr
-        self.analyzer.record_connection(ip)
+        start_time = time.time()
         
+        # 1. Register Connection (Checks for Syn Scan / Flood)
+        alert = self.detector.register_connection(ip)
+        if alert:
+             self.logger.log_event({
+                "source_ip": ip,
+                "source_port": port,
+                "destination_port": self.port,
+                **alert
+            })
+
         try:
-            client_sock.settimeout(10) # 10s timeout
+            client_sock.settimeout(10)
             
-            # 1. Send Banner
-            client_sock.sendall(f"{self.banner}\r\n".encode('utf-8'))
-            
-            # 2. Receive Client Version (Fake Handshake)
-            # Just read, we don't care what it is for this basic simulation
+            # 2. Send Banner
+            try:
+                client_sock.sendall(f"{self.banner}\r\n".encode('utf-8'))
+                banner_sent = True
+            except:
+                banner_sent = False
+
+            # 3. Wait/Read (Detect Logic)
+            # Give client a moment to respond or disconnect
+            # Nmap often disconnects immediately after banner
             try:
                 client_sock.recv(1024)
             except socket.timeout:
                 pass
+            
+            # Check for immediate disconnect (Nmap behavior)
+            duration = time.time() - start_time
+            alert = self.detector.analyze_behavior(ip, duration, banner_sent)
+            if alert:
+                 self.logger.log_event({
+                    "source_ip": ip,
+                    "source_port": port,
+                    "destination_port": self.port,
+                    **alert
+                })
 
-            # 3. Simulate Login Prompt
-            # Note: Real SSH clients won't see this text interactive mode immediately,
-            # but netcat/telnet users will. 
+            # 4. Login Simulation
             client_sock.sendall(b"login: ")
             username = self._receive_line(client_sock)
             
             client_sock.sendall(b"password: ")
             password = self._receive_line(client_sock)
             
-            # 4. Analyze & Log
-            if username or password: # Only log if we got something
-                analysis = self.analyzer.analyze_attempt(ip, username, password)
-                
-                log_data = {
-                    "source_ip": ip,
-                    "source_port": port,
-                    "destination_port": self.port,
-                    "username": username,
-                    "password": password,
-                    "attempt_count": analysis["attempt_count"],
-                    "attack_type": analysis["attack_type"],
-                    "severity": analysis["severity"],
-                    "risk_score": analysis["risk_score"]
-                }
-                
-                self.logger.log_attempt(log_data)
-                
-                # Alerts
-                if analysis["attack_type"] == "Brute Force" or analysis["severity"] == "High":
-                    print(f"\n[ALERT] Possible Brute Force Detected")
-                    print(f"Source IP: {ip}")
-                    print(f"Attempts: {analysis['attempt_count']}")
-                    print(f"Severity: {analysis['severity']}\n")
+            # 5. Brute Force Analysis
+            if username or password:
+                alert = self.detector.analyze_login(ip, username, password)
+                if alert:
+                     self.logger.log_event({
+                        "source_ip": ip,
+                        "source_port": port,
+                        "destination_port": self.port,
+                         "username": username,
+                         "password": password,
+                        **alert
+                    })
+                else:
+                    # Log normal attempt even if not alert
+                    self.logger.log_event({
+                        "source_ip": ip,
+                        "source_port": port,
+                        "destination_port": self.port,
+                        "username": username,
+                        "password": password,
+                        "detection_type": "Login Attempt",
+                        "severity": "Low",
+                        "attempt_count": 1
+                    })
 
-            # 5. Deny Access
-            if self.processing_delay > 0:
-                time.sleep(self.processing_delay) # Fake processing delay
+            # 6. Deny & Close
+            time.sleep(1)
             client_sock.sendall(b"\r\nLogin incorrect\r\n")
-            client_sock.close()
             
         except BrokenPipeError:
-            pass # Client disconnected
-        except ConnectionResetError:
-            pass
+            pass 
         except Exception as e:
-            # print(f"[DEBUG] Error handling client {ip}: {e}")
+            # print(f"[DEBUG] Error {e}")
             pass
         finally:
             try:
@@ -114,16 +132,12 @@ class HoneyServer:
                 pass
 
     def _receive_line(self, sock):
-        """Reads a line from socket until \n or \r"""
         buffer = b""
-        while len(buffer) < 256: # Limit length
+        while len(buffer) < 256:
             try:
                 chunk = sock.recv(1)
-                if not chunk:
-                    break
-                if chunk == b'\n' or chunk == b'\r':
-                    break
+                if not chunk: break
+                if chunk == b'\n' or chunk == b'\r': break
                 buffer += chunk
-            except:
-                break
+            except: break
         return buffer.decode('utf-8', errors='ignore').strip()
